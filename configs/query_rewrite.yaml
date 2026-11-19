@@ -1,0 +1,56 @@
+# Stage 4 (weeks 9-10): query understanding — retrieval-reward-filtered rewrite data, LoRA SFT, downstream eval (E6).
+# 0) python -m mmsearch.data.preprocess colpali_pool --n-pages 20000
+# 1) bash scripts/serve_vlm.sh Qwen/Qwen2.5-VL-7B-Instruct 8000 qwen-vl 1      (teacher; a stronger LLM is better)
+# 2) python -m mmsearch.query.synth build --config configs/query_rewrite.yaml
+#    label <out>/human_check.csv, then: python -m mmsearch.query.synth validate --file <out>/human_check.csv
+# 3) torchrun --nproc_per_node 2 -m mmsearch.train.train_qlora --config configs/query_rewrite.yaml
+#    (stop the teacher server first if it shares the GPU)
+# 4) bash scripts/serve_vlm.sh storage/runs/query/qrewrite_sft/merged 8002 rewriter 1
+# 5) python -m mmsearch.query.run_rewrite_eval --config configs/query_rewrite.yaml
+name: qrewrite
+seed: 0
+pool_dataset: colpali_train_pool    # in-domain pool (train side); ViDoRe test is only used in step 5
+
+reward_retriever:
+  name: colqwen2
+  type: multivector
+  encoder: {model: vidore/colqwen2-v1.0-hf, backend: hf}
+  index: {type: exhaustive}
+
+teacher:
+  base_url: http://127.0.0.1:8000/v1
+  model: null
+  n_candidates: 4
+  temperature: 0.8
+  max_concurrency: 64
+
+synth:
+  n_queries: 12000
+  depth: 100
+  multilingual: {ratio: 0.4, langs: [zh, ja]}
+  keep_easy_ratio: 0.3              # keep some already-rank-1 queries (teaches: don't break good queries)
+  dev_ratio: 0.05
+  human_check: 1000
+
+train:
+  base_model: Qwen/Qwen2.5-VL-7B-Instruct    # ablation: Qwen/Qwen2.5-VL-3B-Instruct (online latency)
+  qlora: false                                # true -> 4-bit base (QLoRA)
+  lora: {r: 64, alpha: 128, dropout: 0.05}    # ablation: r ∈ {16, 64}
+  lr: 1.0e-4
+  epochs: 2
+  per_device_batch: 16
+  grad_accum: 1
+  max_len: 512
+  warmup_ratio: 0.03
+  merge: true
+
+eval:
+  datasets: [vidore_all]
+  langs: [en, zh, ja]
+  max_queries: null
+  metrics: [recall@10, ndcg@5]
+  rewriters:
+    - {name: zeroshot, base_url: http://127.0.0.1:8000/v1, model: null}
+    - {name: sft, base_url: http://127.0.0.1:8002/v1, model: null}
+  modes: [replace, concat, entities]
+  controls: [random_expansion]

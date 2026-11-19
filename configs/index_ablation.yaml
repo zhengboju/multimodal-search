@@ -1,0 +1,45 @@
+# Stage 2 week 5-6: E3 (compression) + E4 (hierarchical index) — recall vs index size vs latency.
+# python -m mmsearch.eval.run_benchmark --config configs/index_ablation.yaml
+# python -m mmsearch.eval.plots tradeoff --results <out>/results.json --metric ndcg@5
+# Latency differences are tiny on 1k-page subsets; for the E4 claim run on a pooled ~20k+ page corpus:
+#   python -m mmsearch.data.preprocess pool --name vidore_pool --sources vidore_arxivqa vidore_docvqa vidore_infovqa \
+#     vidore_tabfquad vidore_tatdqa vidore_shift vidore_synth_ai vidore_synth_energy vidore_synth_gov vidore_synth_health \
+#     docvqa_validation infovqa_validation chartqa_test colpali_train_pool --queries-from vidore_docvqa vidore_tatdqa vidore_synth_gov
+#   ... datasets=[vidore_pool]
+name: index_ablation
+datasets: [vidore_all]
+k: 100
+main_metric: ndcg@5
+metrics: [ndcg@5, recall@1, recall@5, recall@10]
+latency: {enabled: true, n: 100, e2e: false}   # index-only latency (query embeddings precomputed)
+
+_enc: &enc {model: vidore/colqwen2-v1.0-hf, backend: hf}
+
+retrievers:
+  # --- reference
+  - {name: exact-fp16, type: multivector, encoder: *enc, index: {type: exhaustive}}
+  # --- E3a: bytes per value
+  - {name: int8, type: multivector, encoder: *enc, compress: [{type: int8}], index: {type: exhaustive}}
+  # --- E3b: dimension reduction
+  - {name: pca64, type: multivector, encoder: *enc, compress: [{type: pca, dim: 64}], index: {type: exhaustive}}
+  - {name: pca32, type: multivector, encoder: *enc, compress: [{type: pca, dim: 32}], index: {type: exhaustive}}
+  # --- E3c: per-page clustering (token count)
+  - {name: kmeans64, type: multivector, encoder: *enc, compress: [{type: kmeans, k: 64}], index: {type: exhaustive}}
+  - {name: kmeans32, type: multivector, encoder: *enc, compress: [{type: kmeans, k: 32}], index: {type: exhaustive}}
+  - {name: kmeans16, type: multivector, encoder: *enc, compress: [{type: kmeans, k: 16}], index: {type: exhaustive}}
+  # --- E3d: token pruning (salience) + random control
+  - {name: prune-sal-50%, type: multivector, encoder: *enc, compress: [{type: prune, keep: 0.5, strategy: salience}], index: {type: exhaustive}}
+  - {name: prune-sal-25%, type: multivector, encoder: *enc, compress: [{type: prune, keep: 0.25, strategy: salience}], index: {type: exhaustive}}
+  - {name: prune-rand-25%, type: multivector, encoder: *enc, compress: [{type: prune, keep: 0.25, strategy: random}], index: {type: exhaustive}}
+  # --- combos
+  - {name: kmeans64+pca64+int8, type: multivector, encoder: *enc, compress: [{type: kmeans, k: 64}, {type: pca, dim: 64}, {type: int8}], index: {type: exhaustive}}
+  # --- ANN over tokens (PLAID-lite): centroid interaction -> exact rerank
+  - {name: plaid-p2, type: multivector, encoder: *enc, index: {type: plaid, nprobe: 2, n_rerank: 128}}
+  - {name: plaid-p4, type: multivector, encoder: *enc, index: {type: plaid, nprobe: 4, n_rerank: 128}}
+  - {name: plaid-p4-approx, type: multivector, encoder: *enc, index: {type: plaid, nprobe: 4, exact_rerank: false}}
+  # --- E4: hierarchical (page-level coarse vectors -> exact MaxSim on top-N)
+  - {name: hier-k8-n50, type: multivector, encoder: *enc, index: {type: hierarchical, coarse_k: 8, n_candidates: 50}}
+  - {name: hier-k8-n100, type: multivector, encoder: *enc, index: {type: hierarchical, coarse_k: 8, n_candidates: 100}}
+  - {name: hier-k1-n100, type: multivector, encoder: *enc, index: {type: hierarchical, coarse_k: 1, n_candidates: 100}}
+  # --- optional FAISS token index (pip install faiss-cpu)
+  # - {name: faiss-ivf, type: multivector, encoder: *enc, index: {type: faiss, factory: "IVF1024,Flat", nprobe: 16, k_tokens: 64}}

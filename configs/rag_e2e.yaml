@@ -1,0 +1,33 @@
+# Stage 3 (weeks 7-8): end-to-end multimodal RAG + failure attribution + top-k sensitivity (E5).
+# 1) bash scripts/serve_vlm.sh Qwen/Qwen2.5-VL-7B-Instruct 8000 qwen-vl 1
+# 2) python -m mmsearch.rag.run_rag_eval --config configs/rag_e2e.yaml
+#    other datasets: dataset=chartqa_test | infovqa_validation ; budget ablation: budget.strategy=rank_decay
+name: rag_docvqa
+dataset: docvqa_validation          # ViDoRe docvqa/infovqa test answers are hidden -> use the validation split
+max_queries: 1000
+seed: 0
+metric: auto                        # anls (DocVQA/InfoVQA), relaxed accuracy (ChartQA / TAT-DQA)
+
+retriever:
+  name: colqwen2
+  type: multivector
+  encoder: {model: vidore/colqwen2-v1.0-hf, backend: hf}
+  index: {type: exhaustive}
+
+rerank: null                        # {top_n: 10} -> VLM pointwise rerank before generation
+
+generator:
+  base_url: http://127.0.0.1:8000/v1
+  model: null                       # first served model
+  max_concurrency: 32
+  max_new_tokens: 64
+
+budget:                             # visual-token budget shared by all pages in the prompt
+  total_tokens: 6144
+  strategy: uniform                 # uniform | rank_decay
+  min_tokens: 256
+  max_tokens: 1280
+
+ks: [1, 2, 3, 5, 8]
+attribution_k: 3
+conditions: {oracle: true, closed_book: true}

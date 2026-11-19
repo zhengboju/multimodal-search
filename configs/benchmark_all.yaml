@@ -1,0 +1,13 @@
+# Stage 5: one command reproduces every evaluation (training runs are separate; see scripts/run_all.sh).
+# python -m mmsearch.eval.run_benchmark --config configs/benchmark_all.yaml
+# Steps that need a VLM server expect it on :8000 (and the SFT rewriter on :8002).
+name: all
+suite:
+  - {kind: module, module: mmsearch.eval.eval_clip, args: [--model, openai/clip-vit-large-patch14, --dataset, coco_test, --folds, 1, 5]}
+  - {kind: module, module: mmsearch.eval.eval_clip, args: [--model, openai/clip-vit-large-patch14, --dataset, flickr_test, --folds, 1]}
+  - {kind: module, module: mmsearch.eval.eval_clip, args: [--model, "${MMS_STORAGE}/runs/clip/clip_infonce_inbatch/best", --dataset, coco_test, --folds, 1, 5]}
+  - {kind: module, module: mmsearch.eval.eval_clip, args: [--model, "${MMS_STORAGE}/runs/clip/clip_hn_mixed/best", --dataset, coco_test, --folds, 1, 5]}
+  - {kind: retrieval, config: configs/vidore_benchmark.yaml}
+  - {kind: retrieval, config: configs/index_ablation.yaml}
+  - {kind: module, module: mmsearch.rag.run_rag_eval, args: [--config, configs/rag_e2e.yaml]}
+  - {kind: module, module: mmsearch.query.run_rewrite_eval, args: [--config, configs/query_rewrite.yaml]}

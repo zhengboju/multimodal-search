@@ -1,0 +1,14 @@
+# MMS_SERVICE_CONFIG=configs/service.yaml uvicorn mmsearch.service.app:app --host 0.0.0.0 --port 8080
+dataset: vidore_docvqa          # or a pooled corpus (vidore_pool) for realistic latency
+multivector:
+  name: colqwen2
+  encoder: {model: vidore/colqwen2-v1.0-hf, backend: hf}   # add quantization: int8 for the INT8 variant
+  index: {type: plaid, nprobe: 4, n_rerank: 128}
+bm25: true                      # requires OCR text (mmsearch.data.ocr)
+max_batch: 32                   # query-encoder micro-batching
+max_wait_ms: 5
+vlm:                            # optional: /rag and rerank
+  base_url: http://127.0.0.1:8000/v1
+  model: null
+  total_tokens: 4096
+  rerank_top_n: 10

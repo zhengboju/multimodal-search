@@ -1,0 +1,47 @@
+# Stage 2 (weeks 4-6): ViDoRe v1 benchmark — method × subset table (nDCG@5 main metric, as in the ColPali paper).
+# python -m mmsearch.eval.run_benchmark --config configs/vidore_benchmark.yaml
+# Reference (ViDoRe v1 leaderboard): vidore/colqwen2-v1.0 avg nDCG@5 ≈ 89 — row 1 validates the eval pipeline;
+# row 2 is our reproduction (acceptance: within ±2 points of the reference trained on the same data).
+name: vidore_main
+datasets: [vidore_all]
+k: 100
+main_metric: ndcg@5
+metrics: [ndcg@5, ndcg@10, recall@1, recall@5, recall@10, mrr@10]
+latency: {enabled: true, n: 100, e2e: true}
+
+retrievers:
+  - name: colqwen2-v1.0(ref)
+    type: multivector
+    encoder: {model: vidore/colqwen2-v1.0-hf, backend: hf}
+    index: {type: exhaustive}
+
+  - name: colqwen2-repro
+    type: multivector
+    optional: true            # skipped until train_colpali has produced the checkpoint
+    encoder: {checkpoint: "${MMS_STORAGE}/runs/colpali/colqwen2_repro/final"}
+    index: {type: exhaustive}
+
+  - name: clip-L14(dense)
+    type: dense
+    model: openai/clip-vit-large-patch14
+
+  - name: bm25-ocr            # needs `python -m mmsearch.data.ocr --datasets vidore_...` (VLM OCR) first
+    type: bm25
+    optional: true            # hybrids below are skipped automatically if this is missing
+
+  - name: hybrid-rrf          # Week 6 improvement candidate: BM25(OCR) ⊕ multi-vector, RRF
+    type: fusion
+    members: ["colqwen2-v1.0(ref)", bm25-ocr]
+    method: rrf
+    k: 60
+
+  - name: hybrid-weighted
+    type: fusion
+    members: ["colqwen2-v1.0(ref)", bm25-ocr]
+    method: zscore
+    weights: [1.0, 0.3]
+
+  # - name: colqwen2+vlm-rerank   # needs a VLM server (scripts/serve_vlm.sh); ~10 VLM calls per query
+  #   type: rerank
+  #   base: colqwen2-v1.0(ref)
+  #   top_n: 10

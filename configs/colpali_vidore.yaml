@@ -1,0 +1,34 @@
+# Stage 2 (week 4): ColQwen2 reproduction = ColPali recipe on Qwen2-VL-2B.
+# torchrun --nproc_per_node 2 -m mmsearch.train.train_colpali --config configs/colpali_vidore.yaml
+name: colqwen2_repro
+seed: 42
+base_model: Qwen/Qwen2-VL-2B-Instruct
+dim: 128
+max_pixels: 602112          # 768 * 28 * 28  -> <= 768 visual tokens per page
+min_pixels: 3136
+query_augmentation: 10      # 10 <|endoftext|> "buffer" tokens appended to queries (ColPali query augmentation)
+# init_checkpoint: storage/runs/colpali/colqwen2_repro/step1000   # resume / continue
+
+data:
+  shards: 35                # vidore/colpali_train_set shards: 35 ≈ 50k pairs (plan: 先 5 万页跑通); "all" = 118k
+  max_train: null
+  dev_size: 500             # from the set's own test split (in-domain dev)
+
+lora: {r: 32, alpha: 32, dropout: 0.1}   # LM only; vision tower frozen; projection head fully trained
+loss: pairwise              # pairwise (ColPali default: softplus(hardest neg - pos)) | ce (InfoNCE, temperature)
+temperature: 0.02
+gather_negatives: true      # in-batch negatives across both GPUs (64 docs per query instead of 32)
+
+epochs: 1
+per_device_batch: 32
+grad_accum: 1
+lr: 2.0e-4                  # sweep {5e-5 (ColPali paper), 2e-4, 5e-4} on the dev split
+wd: 0.0
+warmup_steps: 100
+max_grad_norm: 1.0
+num_workers: 8
+eval_every: 200
+save_every: 500
+eval_at_start: true
+log_every: 10
+ddp_static_graph: false

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmsearch"
+version = "0.1.0"
+description = "LLM-oriented multimodal retrieval: CLIP / ColQwen2 multi-vector / hybrid / multimodal RAG / query understanding / evaluation"
+requires-python = ">=3.10"
+# Versions are aligned with the target server (torch 2.10 / transformers 5.x / vllm 0.19).
+# Only packages missing on that server are listed in requirements-extra.txt.
+dependencies = [
+    "torch>=2.4",
+    "transformers>=4.53",  # needs the Qwen2-VL `.model` = (visual + language_model) layout and ColQwen2ForRetrieval
+    "accelerate",
+    "datasets",
+    "pyarrow",
+    "pillow",
+    "numpy",
+    "pyyaml",
+    "tqdm",
+    "safetensors",
+    "openai>=1.40",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "modelscope",
+]
+
+[project.optional-dependencies]
+train = ["peft>=0.17"]
+index = ["faiss-cpu"]
+eval = ["pytrec-eval-terrier", "matplotlib"]
+track = ["wandb"]
+
+[tool.setuptools.packages.find]
+include = ["mmsearch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

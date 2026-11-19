@@ -1,0 +1,33 @@
+# Stage 1 (weeks 2-3): CLIP ViT-L/14 fine-tuning on COCO Karpathy train.
+# Ablations (one variable at a time, plan §5):
+#   E2 loss:      loss=infonce | siglip | triplet           (negatives=inbatch)
+#   E1 negatives: negatives=inbatch | random | hard | mixed (loss=infonce)
+#   torchrun --nproc_per_node 2 -m mmsearch.train.train_clip --config configs/clip_coco.yaml negatives=mixed name=clip_hn_mixed
+name: clip_infonce_inbatch
+seed: 42
+model: openai/clip-vit-large-patch14   # ModelScope: AI-ModelScope/clip-vit-large-patch14
+train_dataset: coco_train
+dev_holdout: 5000          # images held out of train for model selection (test split is touched once)
+
+loss: infonce              # infonce | siglip | triplet
+margin: 0.2                # triplet only
+negatives: inbatch         # inbatch | random | hard | mixed
+hard_neg:
+  num_per_sample: 1        # mined negatives appended per (caption, image) pair
+  pool: 20                 # candidates kept per image
+  rank_range: [3, 50]      # skip top-3 (likely false negatives in COCO), mine from ranks 3..49
+  mine_every: 1            # epochs between re-mining with the current model (ANCE)
+
+epochs: 8
+per_device_batch: 512      # × 2 GPUs = 1024 global (features all-gathered for the contrastive loss)
+lr: 1.0e-5
+wd: 0.1
+warmup_ratio: 0.05
+max_grad_norm: 1.0
+grad_ckpt: true            # measure throughput first (plan: 先测吞吐再定 batch), then decide
+augment: false
+num_workers: 12
+eval_batch: 256
+eval_every_epochs: 1
+eval_at_start: true
+log_every: 20

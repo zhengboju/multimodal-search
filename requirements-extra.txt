@@ -1,0 +1,8 @@
+# 目标服务器（python 3.11 / torch 2.10 / transformers 5.17 / vllm 0.19）上缺失的依赖。
+# 其余依赖（torch/transformers/accelerate/datasets/vllm/fastapi/modelscope/bitsandbytes/flash-attn…）已预装，不要重装。
+peft>=0.17                # LoRA（ColQwen2 训练、query 改写微调）
+faiss-cpu                 # 可选：token 级 ANN 索引对比（PLAID-lite 为默认，无需 faiss）
+pytrec-eval-terrier       # 可选：与自实现指标交叉校验
+matplotlib                # 画 recall-体积-延迟曲线、k 敏感性曲线、归因饼图
+pytest                    # 单测
+# wandb                   # 可选：实验追踪（默认写本地 JSONL，设 MMS_WANDB=1 启用）
