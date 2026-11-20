@@ -119,7 +119,9 @@ python -m mmsearch.eval.eval_clip --dataset flickr_test --folds 1
 python -m mmsearch.eval.modality_gap --dataset coco_test              # D4：模态鸿沟
 ```
 
-产物：`storage/runs/clip_eval/<model>_<dataset>/results.md`、`storage/runs/analysis/modality_gap_*/{gap.json,cosine_hist.png}`。
+产物：`storage/runs/clip_eval/<model>_<dataset>/results.md`、`storage/runs/analysis/modality_gap_*/{report.md,gap.json,cosine_hist.png,conditions.png}`。
+
+模态鸿沟的读法：`translate`（只平移文本云 = 真正的去鸿沟）几乎不动 ⇒ **鸿沟不是召回上不去的原因**；`center`（顺带删掉共享锥方向并逐向量重归一化）掉点属副作用；`center_txt` / `center_img` 告诉你哪一侧的信息被破坏。`content_margin`（matched−unmatched）与 `centroid_distance` 的比值才是“内容有多少区分度、鸿沟占多少”的答案。
 
 **验收（论文水平，ViT-L/14，COCO 5K）**：i2t R@1 ≈ 56–58，t2i R@1 ≈ 36–37；Flickr 1K t2i R@1 ≈ 85–87。
 不达标按此顺序查：① `preprocessor_config.json` 的 mean/std 是否被沿用（代码已自动读）② resize 是否 `Resize(短边)+CenterCrop`（不是直接 Resize 到 224）③ 文本是否截断到 77 ④ 是否忘了 L2 归一化。
