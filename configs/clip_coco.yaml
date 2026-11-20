@@ -26,6 +26,7 @@ warmup_ratio: 0.05
 max_grad_norm: 1.0
 grad_ckpt: true            # measure throughput first (plan: 先测吞吐再定 batch), then decide
 augment: false
+draft_size: 224            # JPEG draft decode target (defaults to the model image size); null disables
 num_workers: 12
 eval_batch: 256
 eval_every_epochs: 1

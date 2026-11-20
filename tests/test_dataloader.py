@@ -91,11 +91,35 @@ def test_threaded_shuffle_covers_every_item_per_epoch():
     assert epoch_ids[0] != epoch_ids[1]  # re-permuted every epoch
 
 
-def test_make_loader_with_sampler_stays_a_real_dataloader(monkeypatch):
+def test_make_loader_keeps_ddp_sharding_when_falling_back_to_threads(monkeypatch):
+    """The old fallback refused threads with a sampler and silently used num_workers=0, which serialised JPEG
+    decoding and left the GPUs idle. A sampler must survive the fallback: iterate it, do not ignore it."""
     from torch.utils.data import SequentialSampler
 
     monkeypatch.delenv("MMS_NUM_WORKERS", raising=False)
     monkeypatch.setattr(dl, "shm_available_bytes", lambda: 64 << 20)
-    it = dl.make_loader(IdxDataset(6), 2, num_workers=4, sampler=SequentialSampler(range(6)))
-    assert type(it).__name__ == "DataLoader"  # DDP sharding cannot be emulated with threads
-    assert len(list(it)) == 3
+    # "this rank" only gets indices 0..3 of 10 -> must be respected exactly
+    it = dl.make_loader(IdxDataset(10), 2, num_workers=4, sampler=SequentialSampler(range(4)))
+    assert isinstance(it, dl.ThreadedBatcher)
+    seen = torch.cat(list(it))[:, 0].tolist()
+    assert seen == [0, 1, 2, 3]
+
+
+def test_threaded_batcher_sampler_epochs(monkeypatch):
+    class Sharded:
+        """Stand-in for DistributedSampler: epoch e yields shifted windows of one shared index list."""
+
+        def __init__(self, n, world=2, rank=0):
+            self.n, self.world, self.rank, self.epoch = n, world, rank, 0
+
+        def set_epoch(self, e):
+            self.epoch = e
+
+        def __iter__(self):
+            ids = list(range(self.n))[self.rank :: self.world]
+            return iter(ids[self.epoch * 2 :] + ids[: self.epoch * 2])
+
+    b = dl.ThreadedBatcher(IdxDataset(8), batch_size=2, workers=2, sampler=Sharded(8, 2, 1))
+    assert torch.cat(list(b))[:, 0].tolist() == [1, 3, 5, 7]
+    b.set_epoch(1)  # set_epoch must be forwarded to the sampler
+    assert torch.cat(list(b))[:, 0].tolist() == [5, 7, 1, 3]

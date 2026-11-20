@@ -174,9 +174,16 @@ def main() -> None:
     for epoch in range(int(cfg.epochs)):
         if sampler is not None:
             sampler.set_epoch(epoch)
-        elif hasattr(loader, "set_epoch"):
+        if hasattr(loader, "set_epoch"):
             loader.set_epoch(epoch)
-        for q_in, d_in in loader:
+        it, wait = iter(loader), 0.0
+        while True:
+            tw = time.time()
+            try:
+                q_in, d_in = next(it)
+            except StopIteration:
+                break
+            wait += time.time() - tw
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 q, qm, d, dm = model(q_in, d_in)
             if gather:

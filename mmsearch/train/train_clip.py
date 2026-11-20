@@ -19,11 +19,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DistributedSampler
 
 from ..data.hard_negatives import mine_hard_negatives, random_negatives
+from ..data.image import load_rgb
 from ..data.schema import RetrievalDataset, load_dataset
 from ..eval.eval_clip import bidirectional_recall
 from ..models.clip_wrapper import CLIPWrapper
@@ -63,11 +63,12 @@ class ImageCaptionData:
 
 
 class TrainSet(Dataset):
-    def __init__(self, data: ImageCaptionData, transform, n_hard: int):
+    def __init__(self, data: ImageCaptionData, transform, n_hard: int, draft_size: int | None = 256):
         self.ids = data.train_ids
         self.data = data
         self.transform = transform
         self.n_hard = n_hard
+        self.draft_size = draft_size  # = model image size; None disables JPEG draft decoding
         self.hard: list[np.ndarray] | None = None
         self.epoch = 0
 
@@ -75,7 +76,8 @@ class TrainSet(Dataset):
         return len(self.ids)
 
     def _img(self, i: int) -> torch.Tensor:
-        return self.transform(Image.open(self.data.paths[self.ids[i]]).convert("RGB"))
+        # draft decode: libjpeg goes straight to the smallest scale that still covers the crop size
+        return self.transform(load_rgb(self.data.paths[self.ids[i]], self.draft_size))
 
     def __getitem__(self, i: int):
         rng = random.Random(hash((i, self.epoch)))
@@ -173,7 +175,9 @@ def main() -> None:
     negatives = cfg.get("negatives", "inbatch")
     hn = cfg.get("hard_neg", {})
     n_hard = int(hn.get("num_per_sample", 1)) if negatives in ("hard", "mixed", "random") else 0
-    train_set = TrainSet(data, clip.transform(train=bool(cfg.get("augment", False))), n_hard)
+    train_set = TrainSet(
+        data, clip.transform(train=bool(cfg.get("augment", False))), n_hard, cfg.get("draft_size", clip.image_size)
+    )
     sampler = DistributedSampler(train_set, shuffle=True, seed=int(cfg.seed)) if D.is_dist() else None
     bs = int(cfg.per_device_batch)
     loader = make_loader(train_set, bs, collate_fn=make_collate(clip.tokenizer), num_workers=int(cfg.get("num_workers", 12)),
@@ -215,13 +219,20 @@ def main() -> None:
         train_set.epoch = epoch
         if sampler is not None:
             sampler.set_epoch(epoch)
-        elif hasattr(loader, "set_epoch"):
+        if hasattr(loader, "set_epoch"):
             loader.set_epoch(epoch)
         if n_hard and (epoch % mine_every == 0):
             mine(epoch)
         model.train()
-        t_epoch, seen = time.time(), 0
-        for batch in loader:
+        t_epoch, seen, wait = time.time(), 0, 0.0
+        it = iter(loader)
+        while True:
+            tw = time.time()
+            try:
+                batch = next(it)
+            except StopIteration:
+                break
+            wait += time.time() - tw
             pixel = batch["pixel"].to(device, non_blocking=True)
             ids, am = batch["input_ids"].to(device), batch["attention_mask"].to(device)
             negp = batch.get("neg_pixel")
@@ -261,9 +272,11 @@ def main() -> None:
                 tracker.log({"train/loss": float(D.reduce_mean(loss.detach())), "train/lr": sched.get_last_lr()[0],
                              "train/grad_norm": float(gn), "train/logit_scale": float(clip.logit_scale.exp()),
                              "train/img_per_s": seen / el,
+                             "train/loader_wait_frac": wait / max(1e-6, el),
                              "train/peak_mem_gb": torch.cuda.max_memory_allocated() / 2**30}, step)
-                log.info("ep %d step %d/%d loss %.4f %.0f img/s mem %.1fGB", epoch, step, total, float(loss),
-                         seen / el, torch.cuda.max_memory_allocated() / 2**30)
+                log.info("ep %d step %d/%d loss %.4f %.0f img/s mem %.1fGB data-wait %.0f%%", epoch, step, total,
+                         float(loss), seen / el, torch.cuda.max_memory_allocated() / 2**30, 100 * wait / max(1e-6, el))
+                wait = 0.0
         tracker.log({"train/epoch_seconds": time.time() - t_epoch}, step)
         if (epoch + 1) % int(cfg.get("eval_every_epochs", 1)) == 0 or epoch == epochs - 1:
             res = evaluate(f"epoch{epoch}", step)

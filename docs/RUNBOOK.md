@@ -174,7 +174,9 @@ bash scripts/download_data.sh stage2                       # colpali_train 35 �
 torchrun --nproc_per_node 2 -m mmsearch.train.train_colpali --config configs/colpali_vidore.yaml
 ```
 
-先做一次 20 分钟摸底（正式训练前必做）：
+先做一次 20 分钟摸底（正式训练前必做）。判断瓶颈只看日志里两个数：
+* `data-wait`（每 10 步打印）——这一步里有多少时间在等数据。正常 <15%；>40% 就去调 `MMS_NUM_WORKERS`（解码线程数，建议 `CPU 核数 ÷ 卡数`），而不是调模型。
+* `img/s` 与 `peak_mem_gb`——按显存 ×0.85 反推能加到多大的 `per_device_batch`。
 ```bash
 torchrun --nproc_per_node 2 -m mmsearch.train.train_colpali --config configs/colpali_vidore.yaml \
   data.max_train=2000 per_device_batch=8 epochs=1 log_every=5 eval_every=100000 eval_at_start=false
@@ -394,6 +396,7 @@ python -m mmsearch.eval.run_benchmark --config configs/benchmark_all.yaml
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
+| 训练很慢、`nvidia-smi` 里 GPU 利用率 0 | 数据管道喂不上：DDP + 小 `/dev/shm` 时旧版回退会变成 `num_workers=0`（串行解码 512 张 JPEG） | 已修（`sampler` 也走线程池）。看训练日志每 10 步的 `data-wait`：>40% 说明解码仍是瓶颈 → 提高 `MMS_NUM_WORKERS`（线程数，按 `CPU 核数/卡数` 给）；<15% 说明 GPU 才是瓶颈，可以加大 `per_device_batch` |
 | `RuntimeError: unable to allocate shared memory(shm) for file </torch_...>` | 容器 `/dev/shm` 太小（Docker 默认 64 MB），DataLoader 工作进程靠共享内存传 batch | 代码已修：推理走线程池（不用 shm），训练在 shm 不足时自动降级为线程池。彻底解决：`docker run --shm-size=8g`。自查：`python scripts/check_env.py` 的 `/dev/shm` 行；临时指定：`export MMS_NUM_WORKERS=0`（串行）或 `8` |
 | `modelscope unreachable` / 下载卡住 | 代理、内网 DNS | `curl -I https://www.modelscope.cn`；重跑命令自动续传；改 `MMS_HUB_ORDER=hf` + `HF_ENDPOINT=https://hf-mirror.com` 兜底 |
 | `Could not find ... colqwen2` 或 `ColQwen2ForRetrieval` ImportError | transformers < 4.53 | 该机为 5.17，正常；若降级过，`pip install -U transformers`（别动 torch） |

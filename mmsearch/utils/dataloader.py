@@ -83,6 +83,7 @@ class ThreadedBatcher:
         shuffle: bool = False,
         drop_last: bool = False,
         seed: int = 0,
+        sampler: Any = None,
     ):
         if (env := os.environ.get("MMS_NUM_WORKERS")) is not None:
             workers = int(env)
@@ -93,12 +94,15 @@ class ThreadedBatcher:
         self.desc = desc
         self.lookahead = max(1, int(lookahead))
         self.shuffle, self.drop_last, self.seed = shuffle, drop_last, int(seed)
+        self.sampler = sampler  # e.g. DistributedSampler: __iter__ gives this rank's shard for the epoch
         self.epoch = 0
         self._n = len(dataset)
 
     # ------------------------------------------------------------------ shims
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
+        if self.sampler is not None and hasattr(self.sampler, "set_epoch"):
+            self.sampler.set_epoch(self.epoch)
 
     def __len__(self) -> int:
         n = self._n
@@ -111,6 +115,11 @@ class ThreadedBatcher:
 
     def _indices(self) -> list[int]:
         n = self._n
+        if self.sampler is not None:
+            idx = [int(i) for i in self.sampler]
+            if self.drop_last:
+                idx = idx[: len(idx) - len(idx) % self.batch_size]
+            return idx
         if self.shuffle:
             g = torch.Generator().manual_seed(self.seed + self.epoch)
             idx = torch.randperm(n, generator=g).tolist()
@@ -169,20 +178,23 @@ def make_loader(
 
     `batch_bytes` is the estimated size of one collated batch (defaults to `batch_size` 224² float32 images);
     it only feeds the /dev/shm budget check, so pass a realistic value for big pages.
-    A `sampler` (DDP sharding) forces a real DataLoader — sharding cannot be emulated with threads.
+    A `sampler` (e.g. DistributedSampler) is honoured by both paths: ThreadedBatcher simply iterates it, so
+    DDP keeps its per-rank shard without any worker process (this is what keeps the GPU fed when /dev/shm is tiny).
     """
     if batch_bytes is None:
         batch_bytes = max(1, batch_size) * _DEFAULT_BATCH
     workers = tune_workers(num_workers, batch_bytes)
     if threaded_below_workers is None:
-        switch = workers == 0 and num_workers > 0 and sampler is None
+        switch = workers == 0 and num_workers > 0
     else:
-        switch = workers <= threaded_below_workers and sampler is None
+        switch = workers <= threaded_below_workers
     if switch:
-        threads = max(1, min(num_workers or 8, os.cpu_count() or 1))
-        log.info("data pipeline: %d decode threads, lookahead 2 batches (no worker processes, so no /dev/shm use)", threads)
+        # share the cores between DDP ranks: N ranks x M threads must still fit in the CPU budget
+        world = max(1, int(os.environ.get("LOCAL_WORLD_SIZE", 1) or 1))
+        threads = max(1, min(num_workers or 8, (os.cpu_count() or 8) // world))
+        log.info("data pipeline: %d decode threads, lookahead 2 batches (no worker processes -> no /dev/shm use)", threads)
         return ThreadedBatcher(dataset, batch_size, collate_fn, workers=threads, shuffle=shuffle,
-                               drop_last=drop_last, seed=seed)
+                               drop_last=drop_last, seed=seed, sampler=sampler)
     return DataLoader(
         dataset,
         batch_size=batch_size,
