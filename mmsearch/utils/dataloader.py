@@ -43,24 +43,30 @@ def describe_shm() -> str:
 
 
 def tune_workers(requested: int, batch_bytes: int = _DEFAULT_BATCH) -> int:
-    """Return a num_workers value that will not exhaust /dev/shm."""
+    """Decide how many *worker processes* to use (0 => the caller falls back to a thread pool).
+
+    `MMS_NUM_WORKERS` overrides the parallelism **count** only — never the mechanism. It is the number of
+    decoders the user wants (threads in the fallback, processes when /dev/shm allows); letting it force
+    processes is how a well-meant `MMS_NUM_WORKERS=16` blew up a 52 MB /dev/shm.
+    """
     if (env := os.environ.get("MMS_NUM_WORKERS")) is not None:
-        return max(0, int(env))
+        requested = int(env)
     requested = max(0, int(requested))
     avail = shm_available_bytes()
-    if requested == 0 or avail is None or avail >= 1 << 30:  # no workers, not Linux, or plenty of room
+    if requested == 0 or avail is None or avail >= 1 << 30:  # no parallelism, not Linux, or plenty of room
         return requested
-    if avail >= max(2 * batch_bytes, 256 << 20):  # tight but workable: keep workers, spill via files
+    if avail >= max(4 * batch_bytes, 256 << 20):  # tight but workable: keep workers, spill via files
         torch.multiprocessing.set_sharing_strategy("file_system")
         capped = min(requested, 4)
         log.warning("/dev/shm is only %s; using %d workers with the 'file_system' sharing strategy", describe_shm(), capped)
         return capped
     log.warning(
-        "/dev/shm is only %s but one batch needs ~%.0f MB: worker processes disabled, prefetch falls back to threads "
-        "(correct, slightly slower). Permanent fix: start the container with `--shm-size=8g`, or as root try "
-        "`mount -o remount,size=8G /dev/shm`. Override the thread count with MMS_NUM_WORKERS.",
+        "/dev/shm is only %s but one batch needs ~%.0f MB (worker processes need ~4x that): using %d decode "
+        "THREADS instead of processes — same parallelism, no /dev/shm use. Permanent fix: `--shm-size=8g` at "
+        "container start, or `mount -o remount,size=8G /dev/shm` as root.",
         describe_shm(),
         batch_bytes / 2**20,
+        requested or 8,
     )
     return 0
 
@@ -159,6 +165,45 @@ class ThreadedBatcher:
             pool.shutdown(wait=True)
 
 
+class ShmGuardLoader:
+    """Last line of defence around a multi-process DataLoader.
+
+    The /dev/shm budget is an estimate (image sizes, prefetch depth, other processes). If worker processes do
+    run out anyway, torch raises `RuntimeError: unable to allocate shared memory` mid-epoch; instead of killing
+    a training run hours in, switch this loader to decode threads and continue from the next batch.
+    """
+
+    def __init__(self, loader: Any, dataset: Sequence[Any], batch_size: int, collate_fn: Callable | None,
+                 num_workers: int, sampler: Any, drop_last: bool, shuffle: bool, seed: int):
+        self._loader = loader
+        self._args = dict(batch_size=batch_size, collate_fn=collate_fn, workers=max(1, num_workers),
+                          sampler=sampler, drop_last=drop_last, shuffle=shuffle, seed=seed)
+        self._dataset = dataset
+        self.dataset = dataset
+        self._epoch = 0
+
+    def __len__(self) -> int:
+        return len(self._loader)
+
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch = int(epoch)
+        if hasattr(self._loader, "set_epoch"):
+            self._loader.set_epoch(self._epoch)
+
+    def __iter__(self) -> Iterator[Any]:
+        try:
+            for batch in self._loader:
+                yield batch
+            return
+        except RuntimeError as e:  # noqa: PERF203 - only raised once, on a dead worker pool
+            if "shared memory" not in str(e).lower():
+                raise
+            log.warning("worker processes ran out of /dev/shm mid-epoch (%s); continuing with decode threads", e)
+        self._loader = ThreadedBatcher(self._dataset, **self._args)
+        self._loader.set_epoch(self._epoch)
+        yield from self._loader
+
+
 def make_loader(
     dataset: Sequence[Any],
     batch_size: int,
@@ -195,7 +240,7 @@ def make_loader(
         log.info("data pipeline: %d decode threads, lookahead 2 batches (no worker processes -> no /dev/shm use)", threads)
         return ThreadedBatcher(dataset, batch_size, collate_fn, workers=threads, shuffle=shuffle,
                                drop_last=drop_last, seed=seed, sampler=sampler)
-    return DataLoader(
+    loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=shuffle,
@@ -207,3 +252,6 @@ def make_loader(
         persistent_workers=False,
         prefetch_factor=prefetch_factor if workers > 0 else None,
     )
+    if workers > 0:
+        return ShmGuardLoader(loader, dataset, batch_size, collate_fn, num_workers, sampler, drop_last, shuffle, seed)
+    return loader
