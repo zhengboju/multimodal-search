@@ -20,9 +20,10 @@ from typing import Any, Sequence
 import torch
 import torch.nn as nn
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from tqdm import tqdm
 
+from ..utils.dataloader import ThreadedBatcher
 from ..utils.hub import resolve_model
 from ..utils.misc import get_logger
 from .compat import from_pretrained, parse_dtype, pick_attn_impl, text_hidden_size
@@ -259,10 +260,12 @@ class ColQwen2Encoder(nn.Module):
     @torch.no_grad()
     def encode_images(self, images: Sequence[str | Image.Image], batch_size: int = 16, num_workers: int = 4,
                       desc: str | None = "encode pages") -> list[torch.Tensor]:
-        dl = DataLoader(_Images(images), batch_size=batch_size, num_workers=num_workers,
-                        collate_fn=functools.partial(build_doc_inputs, self.processor, self.cfg))
+        # threaded prefetch: no /dev/shm use (see utils/dataloader.py); the processor call stays in this thread
+        loader = ThreadedBatcher(_Images(images), batch_size,
+                                 collate_fn=functools.partial(build_doc_inputs, self.processor, self.cfg),
+                                 workers=num_workers, desc=desc)
         out: list[torch.Tensor] = []
-        for batch in tqdm(dl, desc=desc, disable=desc is None):
+        for batch in loader:
             emb, mask = self.forward_inputs(batch)
             out.extend(self._unpad(emb, mask))
         return out

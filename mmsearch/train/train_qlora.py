@@ -21,6 +21,7 @@ from ..models.compat import from_pretrained, pick_attn_impl
 from ..query.prompts import REWRITE_SYSTEM
 from ..utils import dist as D
 from ..utils.config import load_config
+from ..utils.dataloader import make_loader
 from ..utils.hub import resolve_model
 from ..utils.misc import get_logger, read_jsonl, seed_everything
 from ..utils.paths import runs_dir
@@ -112,8 +113,8 @@ def main() -> None:
     train = SFTData(read_jsonl(data_dir / "sft_train.jsonl"), processor, int(tc.get("max_len", 512)))
     dev = SFTData(read_jsonl(data_dir / "sft_dev.jsonl"), processor, int(tc.get("max_len", 512)))
     sampler = DistributedSampler(train, shuffle=True, seed=int(cfg.get("seed", 0))) if D.is_dist() else None
-    loader = DataLoader(train, batch_size=int(tc.per_device_batch), sampler=sampler, shuffle=sampler is None,
-                        collate_fn=train.collate, drop_last=True)
+    loader = make_loader(train, int(tc.per_device_batch), collate_fn=train.collate, num_workers=int(tc.get("num_workers", 0)),
+                         shuffle=sampler is None, sampler=sampler, drop_last=True)
     accum = int(tc.get("grad_accum", 1))
     total = int(tc.epochs) * len(loader) // accum
     warm = max(1, int(float(tc.get("warmup_ratio", 0.03)) * total))
@@ -126,7 +127,7 @@ def main() -> None:
     def dev_loss() -> float:
         model.eval()
         losses = []
-        for b in DataLoader(dev, batch_size=16, collate_fn=dev.collate):
+        for b in DataLoader(dev, batch_size=16, collate_fn=dev.collate, num_workers=0):
             b = {k: v.to(device) for k, v in b.items()}
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 losses.append(float(model(**b).loss))
@@ -138,6 +139,8 @@ def main() -> None:
     for epoch in range(int(tc.epochs)):
         if sampler is not None:
             sampler.set_epoch(epoch)
+        elif hasattr(loader, "set_epoch"):
+            loader.set_epoch(epoch)
         for b in loader:
             b = {k: v.to(device) for k, v in b.items()}
             with torch.autocast("cuda", dtype=torch.bfloat16):

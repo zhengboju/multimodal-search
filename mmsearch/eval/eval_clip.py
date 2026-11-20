@@ -77,13 +77,14 @@ def main() -> None:
     ap.add_argument("--folds", type=int, nargs="+", default=[1, 5], help="1 = 5K (COCO) / 1K (Flickr); 5 = COCO 1K protocol")
     ap.add_argument("--out", default=None)
     ap.add_argument("--batch-size", type=int, default=256)
+    ap.add_argument("--num-workers", type=int, default=8, help="image-decode threads (no /dev/shm needed)")
     args = ap.parse_args()
 
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     model = CLIPWrapper(args.model, dtype="fp16" if dev == "cuda" else None).to(dev).eval()
     ds = load_dataset(args.dataset)
     images, texts, _ = dataset_tensors(ds)
-    img = model.encode_images(images, args.batch_size)
+    img = model.encode_images(images, args.batch_size, num_workers=args.num_workers)
     txt = model.encode_texts(texts, args.batch_size)
     rows = []
     for f in args.folds:

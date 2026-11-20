@@ -10,10 +10,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import Dataset
 from torchvision import transforms as T
 from tqdm import tqdm
 
+from ..utils.dataloader import ThreadedBatcher
 from ..utils.hub import resolve_model
 from .compat import from_pretrained, parse_dtype
 
@@ -101,11 +102,11 @@ class CLIPWrapper(nn.Module):
     @torch.no_grad()
     def encode_images(self, images: Sequence[str | Image.Image], batch_size: int = 256, num_workers: int = 8,
                       desc: str | None = "encode images") -> torch.Tensor:
-        dl = DataLoader(ImageListDataset(images, self.transform(False)), batch_size=batch_size,
-                        num_workers=num_workers, pin_memory=True)
+        # threaded prefetch: no /dev/shm use, so it works in containers with the default 64 MB shm
+        loader = ThreadedBatcher(ImageListDataset(images, self.transform(False)), batch_size, workers=num_workers, desc=desc)
         dtype = next(self.parameters()).dtype
         out = []
-        for px in tqdm(dl, desc=desc, disable=desc is None):
+        for px in loader:
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"):
                 out.append(self.encode_image(px.to(self.device, dtype=dtype, non_blocking=True)).float().cpu())
         return torch.cat(out) if out else torch.empty(0)

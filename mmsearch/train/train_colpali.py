@@ -14,7 +14,7 @@ from pathlib import Path
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
+from torch.utils.data import Dataset, DistributedSampler
 
 from ..data.preprocess import download_colpali_train
 from ..eval.metrics import evaluate_run
@@ -22,6 +22,7 @@ from ..models.colpali import ColQwen2Encoder, build_doc_inputs, build_query_inpu
 from ..models.losses import colbert_ce_loss, colbert_pairwise_ce_loss, maxsim_scores
 from ..utils import dist as D
 from ..utils.config import load_config
+from ..utils.dataloader import make_loader
 from ..utils.misc import get_logger, seed_everything, write_json
 from ..utils.paths import cache_dir, runs_dir
 from ..utils.tracker import Tracker
@@ -146,8 +147,8 @@ def main() -> None:
     ds = PairDataset(train_hf)
     sampler = DistributedSampler(ds, shuffle=True, seed=int(cfg.seed)) if D.is_dist() else None
     bs = int(cfg.per_device_batch)
-    loader = DataLoader(ds, batch_size=bs, sampler=sampler, shuffle=sampler is None, drop_last=True,
-                        num_workers=int(cfg.get("num_workers", 8)), collate_fn=PairCollator(enc.processor, enc.cfg), pin_memory=True)
+    loader = make_loader(ds, bs, collate_fn=PairCollator(enc.processor, enc.cfg), num_workers=int(cfg.get("num_workers", 8)),
+                         shuffle=sampler is None, sampler=sampler, drop_last=True)
     accum = int(cfg.get("grad_accum", 1))
     total = int(cfg.epochs) * len(loader) // accum
     params = enc.trainable_parameters()
@@ -172,6 +173,8 @@ def main() -> None:
     for epoch in range(int(cfg.epochs)):
         if sampler is not None:
             sampler.set_epoch(epoch)
+        elif hasattr(loader, "set_epoch"):
+            loader.set_epoch(epoch)
         for q_in, d_in in loader:
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 q, qm, d, dm = model(q_in, d_in)

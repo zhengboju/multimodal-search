@@ -76,6 +76,7 @@ python scripts/check_env.py
 - `OK flash_attn`：训练会走 `flash_attention_2`；若为 `--`，代码自动降级 `sdpa`（慢 ~15%，不影响正确性）。
 - `-- peft` → `pip install peft`；`-- faiss` → 只用 PLAID-lite 就够，`FaissTokenIndex` 可跳过。
 - `-- modelscope unreachable`：查代理/内网 DNS，这一步不通后面全卡。
+- `/dev/shm: 64 MB` —— **容器默认值，会让多进程 DataLoader 直接崩**（见排障表 `unable to allocate shared memory`）。代码已自动降级为线程池（只影响速度，不影响结果）；想跑满速就让运维用 `--shm-size=8g` 重启容器，或 `export MMS_NUM_WORKERS=...` 手动指定。
 
 ```bash
 torchrun --nproc_per_node 2 scripts/check_dist.py
@@ -391,6 +392,7 @@ python -m mmsearch.eval.run_benchmark --config configs/benchmark_all.yaml
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
+| `RuntimeError: unable to allocate shared memory(shm) for file </torch_...>` | 容器 `/dev/shm` 太小（Docker 默认 64 MB），DataLoader 工作进程靠共享内存传 batch | 代码已修：推理走线程池（不用 shm），训练在 shm 不足时自动降级为线程池。彻底解决：`docker run --shm-size=8g`。自查：`python scripts/check_env.py` 的 `/dev/shm` 行；临时指定：`export MMS_NUM_WORKERS=0`（串行）或 `8` |
 | `modelscope unreachable` / 下载卡住 | 代理、内网 DNS | `curl -I https://www.modelscope.cn`；重跑命令自动续传；改 `MMS_HUB_ORDER=hf` + `HF_ENDPOINT=https://hf-mirror.com` 兜底 |
 | `Could not find ... colqwen2` 或 `ColQwen2ForRetrieval` ImportError | transformers < 4.53 | 该机为 5.17，正常；若降级过，`pip install -U transformers`（别动 torch） |
 | CLIP 零样本 R@1 只有 30% | mean/std、resize 方式、忘了归一化 | 用 `storage/models/.../preprocessor_config.json` 的 mean/std（代码已读）；`Resize(短边)+CenterCrop` |

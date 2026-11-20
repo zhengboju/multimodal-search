@@ -21,7 +21,7 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
+from torch.utils.data import Dataset, DistributedSampler
 
 from ..data.hard_negatives import mine_hard_negatives, random_negatives
 from ..data.schema import RetrievalDataset, load_dataset
@@ -30,6 +30,7 @@ from ..models.clip_wrapper import CLIPWrapper
 from ..models.losses import SigLIPHead, infonce_loss, siglip_loss, triplet_loss
 from ..utils import dist as D
 from ..utils.config import load_config
+from ..utils.dataloader import make_loader
 from ..utils.misc import get_logger, seed_everything, write_json
 from ..utils.paths import runs_dir
 from ..utils.tracker import Tracker
@@ -175,9 +176,8 @@ def main() -> None:
     train_set = TrainSet(data, clip.transform(train=bool(cfg.get("augment", False))), n_hard)
     sampler = DistributedSampler(train_set, shuffle=True, seed=int(cfg.seed)) if D.is_dist() else None
     bs = int(cfg.per_device_batch)
-    loader = DataLoader(train_set, batch_size=bs, sampler=sampler, shuffle=sampler is None, drop_last=True,
-                        num_workers=int(cfg.get("num_workers", 12)), pin_memory=True, persistent_workers=False,
-                        collate_fn=make_collate(clip.tokenizer))
+    loader = make_loader(train_set, bs, collate_fn=make_collate(clip.tokenizer), num_workers=int(cfg.get("num_workers", 12)),
+                         shuffle=sampler is None, sampler=sampler, drop_last=True)
     epochs = int(cfg.epochs)
     total = epochs * len(loader)
     opt = torch.optim.AdamW(param_groups(module, float(cfg.wd)), lr=float(cfg.lr), betas=(0.9, 0.98), eps=1e-6)
@@ -215,6 +215,8 @@ def main() -> None:
         train_set.epoch = epoch
         if sampler is not None:
             sampler.set_epoch(epoch)
+        elif hasattr(loader, "set_epoch"):
+            loader.set_epoch(epoch)
         if n_hard and (epoch % mine_every == 0):
             mine(epoch)
         model.train()

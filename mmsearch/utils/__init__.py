@@ -8,6 +8,7 @@ from .misc import (
     write_json,
     write_jsonl,
 )
+from .dataloader import ThreadedBatcher, make_loader, shm_available_bytes, tune_workers
 from .paths import repo_root, storage_dir
 
 __all__ = [
@@ -20,5 +21,9 @@ __all__ = [
     "write_json",
     "write_jsonl",
     "repo_root",
+    "ThreadedBatcher",
+    "make_loader",
+    "shm_available_bytes",
+    "tune_workers",
     "storage_dir",
 ]

@@ -44,6 +44,11 @@ def main() -> None:
             print(f"{ok(True)}{name} reachable")
         except Exception as e:  # noqa: BLE001
             print(f"{ok(False)}{name} unreachable ({type(e).__name__})")
+    from mmsearch.utils.dataloader import describe_shm, shm_available_bytes, tune_workers
+
+    avail = shm_available_bytes()
+    print(f"{ok(avail is None or avail >= 1 << 30)}/dev/shm: {describe_shm()} (need >= 1 GB for multi-process loaders; "
+          f"else loaders fall back to a thread pool). tune_workers(12) -> {tune_workers(12)}")
     from mmsearch.utils.paths import storage_dir
 
     free = shutil.disk_usage(storage_dir()).free / 2**30
