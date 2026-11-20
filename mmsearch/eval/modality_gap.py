@@ -70,12 +70,18 @@ def apply_condition(name: str, img: torch.Tensor, txt: torch.Tensor) -> tuple[to
     raise ValueError(f"unknown condition {name}; choose from {CONDITIONS}")
 
 
-def gap_stats(img: torch.Tensor, txt: torch.Tensor, t2i: torch.Tensor, seed: int = 0) -> dict:
-    mi, mt = raw_centroid(img), raw_centroid(txt)
-    mi_u, mt_u = F.normalize(mi, dim=0), F.normalize(mt, dim=0)
+def pair_similarities(img: torch.Tensor, txt: torch.Tensor, t2i: torch.Tensor, seed: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cosine of matched (caption, its image) pairs and of random pairs — the discrimination budget."""
     matched = (txt * img[t2i]).sum(-1)
     g = torch.Generator().manual_seed(seed)
     unmatched = (txt * img[torch.randint(0, img.shape[0], (txt.shape[0],), generator=g)]).sum(-1)
+    return matched, unmatched
+
+
+def gap_stats(img: torch.Tensor, txt: torch.Tensor, t2i: torch.Tensor, seed: int = 0) -> dict:
+    mi, mt = raw_centroid(img), raw_centroid(txt)
+    mi_u, mt_u = F.normalize(mi, dim=0), F.normalize(mt, dim=0)
+    matched, unmatched = pair_similarities(img, txt, t2i, seed)
     # how much of a matched pair's offset is just the modality gap vector? (caption - image vs m_txt - m_img,
     # so +1 = "the caption sits exactly where the modality gap predicts it should")
     offset = txt - img[t2i]
@@ -97,6 +103,51 @@ def gap_stats(img: torch.Tensor, txt: torch.Tensor, t2i: torch.Tensor, seed: int
         "_matched": matched,
         "_unmatched": unmatched,
     }
+
+
+def build_verdict(by: dict[str, dict], s: dict, eps: float = 2.0) -> list[str]:
+    """Turn the measurements into the conclusion, instead of asserting one in advance."""
+    base = by.get("original")
+    if base is None:
+        return []
+    out: list[str] = []
+    tr = by.get("translate")
+    if tr is not None:
+        di, dt = tr["i2t_R@1"] - base["i2t_R@1"], tr["t2i_R@1"] - base["t2i_R@1"]
+        if min(di, dt) < -eps:
+            out.append(
+                f"**Post-hoc gap removal is destructive here: `translate` costs {di:+.1f} i2t / {dt:+.1f} t2i R@1 and "
+                f"shrinks the matched−unmatched margin from {base['margin']:.3f} to {tr['margin']:.3f}.** "
+                f"Matched pairs are offset {s['offset_along_gap_mean']:.2f} (cos) along the gap axis, so that axis carries "
+                "the match signal — subtracting it is not post-processing, it is deleting information. "
+                "Gap/cone must be addressed in the training objective, not in embedding space."
+            )
+        elif max(di, dt) > eps:
+            out.append(
+                f"`translate` gains {di:+.1f} i2t / {dt:+.1f} t2i R@1 (margin {base['margin']:.3f} -> {tr['margin']:.3f}): "
+                "the gap is a removable nuisance in this checkpoint, so simple post-processing is worth keeping."
+            )
+        else:
+            out.append(
+                f"`translate` moves recall by only {di:+.1f} / {dt:+.1f} points: the gap is not what limits retrieval; "
+                f"the loss happens inside each modality (cone tightness {s['img_cone_norm']:.2f} vs {s['txt_cone_norm']:.2f})."
+            )
+    ct, ci = by.get("center_txt"), by.get("center_img")
+    if ct is not None and ci is not None:
+        asym = (ct["i2t_R@1"] - base["i2t_R@1"]) - (ci["i2t_R@1"] - base["i2t_R@1"])
+        out.append(
+            f"Side asymmetry: centring only the texts changes i2t by {ct['i2t_R@1'] - base['i2t_R@1']:+.1f} "
+            f"(t2i {ct['t2i_R@1'] - base['t2i_R@1']:+.1f}); centring only the images changes i2t by "
+            f"{ci['i2t_R@1'] - base['i2t_R@1']:+.1f} (t2i {ci['t2i_R@1'] - base['t2i_R@1']:+.1f}). "
+            f"The two sides are {'not' if abs(asym) > eps else 'roughly equally'} symmetric under surgery — "
+            "the text cloud is the more spread one and behaves differently as candidate vs query."
+        )
+    out.append(
+        f"Content budget: margin {s['content_margin']:.3f} against a centroid offset of {s['centroid_distance']:.3f}. "
+        "That ratio, not the gap itself, is the headroom a single-vector dual encoder has on this data "
+        "(and the reason late-interaction / multi-vector retrieval is worth its storage cost)."
+    )
+    return out
 
 
 # ----------------------------------------------------------------------------- main
@@ -138,7 +189,14 @@ def main() -> None:
         s["centroid_cosine"], s["centroid_distance"], s["img_cone_norm"], s["txt_cone_norm"],
         s["matched_cos_mean"], s["unmatched_cos_mean"], s["content_margin"], s["offset_along_gap_mean"],
     )
-    rows = [{"condition": c, **{k: v for k, v in r.items() if k.startswith(("i2t_R@1", "t2i_R@1", "rsum"))}} for c, r in results.items()]
+    def cond_row(name: str, r: dict) -> dict:
+        mi, mt = pair_similarities(*apply_condition(name, img, txt), t2i)
+        return {"condition": name, "i2t_R@1": r["i2t_R@1"], "t2i_R@1": r["t2i_R@1"], "rsum": r["rsum"],
+                "matched": float(mi.mean()), "unmatched": float(mt.mean()), "margin": float((mi - mt).mean())}
+
+    rows = [cond_row(c, r) for c, r in results.items()]
+    by = {r["condition"]: r for r in rows}
+    verdict = build_verdict(by, s)
     md = [
         f"# Modality gap — {Path(args.model).name} on {ds.name}",
         "",
@@ -152,12 +210,12 @@ def main() -> None:
         "",
         "## Retrieval under each intervention",
         "",
-        markdown_table(rows, ["condition", "i2t_R@1", "t2i_R@1", "rsum"], digits=2),
+        markdown_table(rows, ["condition", "i2t_R@1", "t2i_R@1", "rsum", "matched", "unmatched", "margin"], digits=3),
         "",
-        "* `translate` is the textbook gap removal (constant shift of the text cloud): if the gap were what limits",
-        "  recall, this would jump. It does not move much — the gap is not where the information is lost.",
-        "* `center` additionally removes the shared cone direction and rescales every vector; the drop there is",
-        "  collateral damage, not evidence that the gap is useful. `center_txt` / `center_img` show which side breaks.",
+        "* `translate` = the textbook gap removal (constant shift of the text cloud onto the image centroid).",
+        "* `margin` = matched − unmatched similarity under that intervention: what the ranking actually has to work with.",
+        "",
+        *verdict,
     ]
     text = "\n".join(md) + "\n"
     (out / "report.md").write_text(text, encoding="utf-8")

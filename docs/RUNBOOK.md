@@ -121,7 +121,7 @@ python -m mmsearch.eval.modality_gap --dataset coco_test              # D4：模
 
 产物：`storage/runs/clip_eval/<model>_<dataset>/results.md`、`storage/runs/analysis/modality_gap_*/{report.md,gap.json,cosine_hist.png,conditions.png}`。
 
-模态鸿沟的读法：`translate`（只平移文本云 = 真正的去鸿沟）几乎不动 ⇒ **鸿沟不是召回上不去的原因**；`center`（顺带删掉共享锥方向并逐向量重归一化）掉点属副作用；`center_txt` / `center_img` 告诉你哪一侧的信息被破坏。`content_margin`（matched−unmatched）与 `centroid_distance` 的比值才是“内容有多少区分度、鸿沟占多少”的答案。
+模态鸿沟的读法（结论由数字决定，不要预设）：看 `translate`（只平移文本云 = 真正的去鸿沟）的 Δ——**掉很多**说明鸿沟轴本身就承载匹配信号（匹配对的偏移 68% 落在该轴上），事后减掉等于删信息，只能在训练目标里解决；**几乎不动**说明鸿沟不是召回瓶颈，掉点来自居中附带的副作用。再看 `margin`（matched−unmatched）在所有条件里的变化：它才是排序真正可用的“判别预算”，`translate` 若把 0.17 压到 0.08，召回必然塌。`center_txt` / `center_img` 的不对称告诉你哪一侧更脆弱（文本云更分散 0.59 vs 图像 0.70，两边作为候选/查询时的行为不同）。报告里写“margin 0.17 对质心偏移 1.26”这个比值，它才是双塔在这份数据上的天花板。
 
 **验收（论文水平，ViT-L/14，COCO 5K）**：i2t R@1 ≈ 56–58，t2i R@1 ≈ 36–37；Flickr 1K t2i R@1 ≈ 85–87。
 不达标按此顺序查：① `preprocessor_config.json` 的 mean/std 是否被沿用（代码已自动读）② resize 是否 `Resize(短边)+CenterCrop`（不是直接 Resize 到 224）③ 文本是否截断到 77 ④ 是否忘了 L2 归一化。

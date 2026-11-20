@@ -3,6 +3,7 @@ import torch
 from mmsearch.eval.modality_gap import (
     CONDITIONS,
     apply_condition,
+    build_verdict,
     gap_stats,
     raw_centroid,
     translated,
@@ -62,3 +63,32 @@ def test_gap_stats_are_consistent():
     for c in CONDITIONS:
         a, b = apply_condition(c, img, txt)
         assert a.shape == img.shape and b.shape == txt.shape
+
+def _table(i2t, t2i, margin):
+    base = dict(i2t_Rat1=56.0, t2i_Rat1=36.0, rsum=390.0, matched=0.26, unmatched=0.09, margin=0.17)
+    mk = lambda a, b, m: {"i2t_R@1": a, "t2i_R@1": b, "matched": m + 0.09, "unmatched": 0.09, "margin": m}  # noqa: E731
+    return {
+        "original": mk(56.0, 36.0, margin),
+        "translate": mk(i2t, t2i, 0.08),
+        "center_txt": mk(43.0, 38.0, 0.15),
+        "center_img": mk(53.0, 31.0, 0.16),
+    }
+
+
+STATS = dict(offset_along_gap_mean=0.68, img_cone_norm=0.70, txt_cone_norm=0.59, content_margin=0.17, centroid_distance=1.26)
+
+
+def test_verdict_regimes():
+    """The conclusion must follow the measurement, not be hard-coded (an earlier version asserted the wrong one)."""
+    destructive = "\\n".join(build_verdict(_table(38.0, 23.0, 0.17), STATS))
+    assert "destructive" in destructive and "gap axis" in destructive
+
+    gain = "\\n".join(build_verdict(_table(62.0, 42.0, 0.17), STATS))
+    assert "removable nuisance" in gain
+
+    neutral = "\\n".join(build_verdict(_table(56.5, 36.4, 0.17), STATS))
+    assert "not what limits retrieval" in neutral
+
+    assert "asymmetry" in neutral.lower() or "Side asymmetry" in neutral
+    assert "Content budget" in neutral
+    assert build_verdict({}, STATS) == []

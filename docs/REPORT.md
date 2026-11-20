@@ -12,7 +12,7 @@
 | CLIP ViT-L/14 zero-shot | Flickr30K | 1K | | | | | |
 
 验收：COCO 5K t2i/i2t R@1 落在论文区间（i2t≈56–58，t2i≈36–37）；否则先查 resize/normalize。
-模态鸿沟：质心距离 = __，去鸿沟后检索变化 = __（`runs/analysis/modality_gap_*`）。
+模态鸿沟（`runs/analysis/modality_gap_*/report.md`）：质心余弦 = __，图像/文本云紧致度 = __ / __，内容 margin = __（对质心偏移 __）；`translate` 去鸿沟后 i2t/t2i 变化 = __ / __ ⇒ 结论：鸿沟__（是/不是）限制召回的因素，可减/不可事后减，因此__（训练目标上做什么）。
 
 ## 1. 图文检索微调（Week 2–3）
 
