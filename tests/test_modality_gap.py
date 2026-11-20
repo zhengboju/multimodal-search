@@ -65,7 +65,6 @@ def test_gap_stats_are_consistent():
         assert a.shape == img.shape and b.shape == txt.shape
 
 def _table(i2t, t2i, margin):
-    base = dict(i2t_Rat1=56.0, t2i_Rat1=36.0, rsum=390.0, matched=0.26, unmatched=0.09, margin=0.17)
     mk = lambda a, b, m: {"i2t_R@1": a, "t2i_R@1": b, "matched": m + 0.09, "unmatched": 0.09, "margin": m}  # noqa: E731
     return {
         "original": mk(56.0, 36.0, margin),
