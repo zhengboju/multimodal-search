@@ -115,11 +115,15 @@ def test_threaded_batcher_sampler_epochs(monkeypatch):
         def set_epoch(self, e):
             self.epoch = e
 
+        def __len__(self):
+            return len(range(self.n)[self.rank :: self.world])
+
         def __iter__(self):
             ids = list(range(self.n))[self.rank :: self.world]
             return iter(ids[self.epoch * 2 :] + ids[: self.epoch * 2])
 
     b = dl.ThreadedBatcher(IdxDataset(8), batch_size=2, workers=2, sampler=Sharded(8, 2, 1))
+    assert len(b) == 2  # 4 items of this shard / bs 2 - the epoch length must follow the sampler, not the dataset
     assert torch.cat(list(b))[:, 0].tolist() == [1, 3, 5, 7]
     b.set_epoch(1)  # set_epoch must be forwarded to the sampler
     assert torch.cat(list(b))[:, 0].tolist() == [5, 7, 1, 3]

@@ -111,7 +111,8 @@ class ThreadedBatcher:
             self.sampler.set_epoch(self.epoch)
 
     def __len__(self) -> int:
-        n = self._n
+        # the sampler defines this epoch''s workload (e.g. one DDP shard), not the whole dataset
+        n = len(self.sampler) if self.sampler is not None else self._n
         if self.drop_last:
             n -= n % self.batch_size
         return (n + self.batch_size - 1) // self.batch_size
