@@ -7,12 +7,19 @@
 
 | 模型 | 数据 | 协议 | i2t R@1 | i2t R@5 | t2i R@1 | t2i R@5 | rsum |
 |---|---|---|---|---|---|---|---|
-| CLIP ViT-L/14 zero-shot | COCO | 5K | | | | | |
-| CLIP ViT-L/14 zero-shot | COCO | 1K×5 | | | | | |
-| CLIP ViT-L/14 zero-shot | Flickr30K | 1K | | | | | |
+| CLIP ViT-L/14 zero-shot | COCO | 5K | 56.20 | 79.32 | 36.62 | 61.17 | 390.98 |
+| CLIP ViT-L/14 zero-shot | COCO | 1K×5 | 74.80 | 92.82 | 55.51 | 82.50 | 493.68 |
+| CLIP ViT-L/14 zero-shot | Flickr30K | 1K | 85.40 | 97.60 | 65.22 | 87.32 | 526.46 |
+| **微调 baseline**（infonce + in-batch，global 1024，8 ep） | COCO | 5K | 75.72 | 92.82 | 58.62 | 82.37 | 494.88 |
+
+> 测试集口径（阶段 1 起统一）：`coco_test_clean` = `coco_test` 剔除 1 张与训练集重复的图 + 1136 条在训练集里出现过的雷同 caption
+> （`python -m mmsearch.data.check_leak --a coco_train --b coco_test --write-clean coco_test_clean`）。
+> 内容哈希复核：(文本,图片) 对重叠 = 0；文档重叠 1/5000 = 0.02%；查询文本复用 4.5%。
+> 在 clean 集上，同一 baseline 为 **5K 75.92 / 60.76（rsum 500.76）**、1K×5 89.45 / 78.64 —— 剔除后 t2i **+2.1 点**，
+> 说明这些 caption 在训练集里配的是另一张图，构成跨模态负迁移而非记忆泄漏。**后续所有消融一律用 coco_test_clean。**
 
 验收：COCO 5K t2i/i2t R@1 落在论文区间（i2t≈56–58，t2i≈36–37）；否则先查 resize/normalize。
-模态鸿沟（`runs/analysis/modality_gap_*/report.md`）：质心余弦 = __，图像/文本云紧致度 = __ / __，内容 margin = __（对质心偏移 __）；`translate` 去鸿沟后 i2t/t2i 变化 = __ / __ ⇒ 结论：鸿沟__（是/不是）限制召回的因素，可减/不可事后减，因此__（训练目标上做什么）。
+模态鸿沟（`runs/analysis/modality_gap_*/report.md`）：质心余弦 **0.204**（单位质心距离 1.262），图像/文本云紧致度 **0.705 / 0.595**，内容 margin **0.172**；匹配对偏移沿鸿沟轴 **0.68**（IQR 0.64–0.72）。干预：`translate`（平移文本云对齐质心）**i2t 56.20→38.06 / t2i 36.62→23.11**，margin 0.172→0.080；`center` 51.04/36.37；`center_txt` 43.48/**38.12**；`center_img` 53.08/**31.33**。⇒ 结论：**鸿沟不是可事后减去的外在偏移，它就是匹配信号所在的轴**（匹配对偏移 68% 落在该轴上），任何全局仿射操作都在删信息；且两侧不对称（文本云更分散，作候选时崩得更狠）。因此约束只能进训练目标（多向量 late interaction 而非单向量对齐），这也是阶段 2 的动机。
 
 ## 1. 图文检索微调（Week 2–3）
 
@@ -25,6 +32,7 @@
 | Triplet (VSE++) | | | | | | |
 
 **E1 负样本阶梯**（loss=InfoNCE）
+> 评测集固定 `coco_test_clean`；baseline 行 = infonce + in-batch（5K i2t 75.92 / t2i 60.76）。
 
 | 负样本 | t2i R@1 | Δ vs inbatch | 挖掘耗时/epoch |
 |---|---|---|---|

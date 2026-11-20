@@ -153,6 +153,15 @@ done
 
 产物：`storage/runs/clip/<name>/{best,last}/`（HF 格式，可直接给 `eval_clip` 或 `DenseRetriever` 用）、`metrics.jsonl`。
 
+**先建干净的测试集，再评第一组**（阶段 1 起口径固定，否则后面无法横向比较）：
+
+```bash
+bash scripts/download_data.sh stage1
+python -m mmsearch.data.check_leak --a coco_train --b coco_test --write-clean coco_test_clean
+# 之后所有消融都用这条命令评： --dataset coco_test_clean --folds 1 5
+```
+`check_leak` 的判据是 **“(文本, 图片) 对重叠 = 0”**，不是“文本零重复”——COCO 的短 caption 天生会在不同图之间复用（实测 4.5%），那属于正常。实测剔除后 t2i **+2.1 点**（这些 query 上存在跨模态负迁移），因此 clean 集比原始集更适合当基准。
+
 **先测吞吐再定 batch**（计划里的硬要求）：加 `per_device_batch=128 log_every=10` 跑 50 step，看日志里的 `img/s`、`peak_mem_gb`，按显存 ×0.85 线性放大。参考：bs 512×2 卡 + 梯度检查点约 60–70 GB/卡；不开检查点会 OOM。
 CLIP 每 epoch 约 110k/1024 ≈ 108 step，单 step 1.5–2.5 s ⇒ 每 epoch 4–6 分钟，8 epoch + 每 epoch 一次 5k dev 编码 ≈ 45–60 分钟/组。6 组 ≈ 6 h（若发现 8 epoch 早就在 dev 上平台，可降到 5 epoch）。
 
