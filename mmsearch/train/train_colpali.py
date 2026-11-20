@@ -148,7 +148,8 @@ def main() -> None:
     sampler = DistributedSampler(ds, shuffle=True, seed=int(cfg.seed)) if D.is_dist() else None
     bs = int(cfg.per_device_batch)
     loader = make_loader(ds, bs, collate_fn=PairCollator(enc.processor, enc.cfg), num_workers=int(cfg.get("num_workers", 8)),
-                         shuffle=sampler is None, sampler=sampler, drop_last=True)
+                         shuffle=sampler is None, sampler=sampler, drop_last=True,
+                         batch_bytes=bs * 3 * 2**20)  # ~3 MB per decoded page image
     accum = int(cfg.get("grad_accum", 1))
     total = int(cfg.epochs) * len(loader) // accum
     params = enc.trainable_parameters()

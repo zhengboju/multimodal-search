@@ -56,8 +56,9 @@ def tune_workers(requested: int, batch_bytes: int = _DEFAULT_BATCH) -> int:
         log.warning("/dev/shm is only %s; using %d workers with the 'file_system' sharing strategy", describe_shm(), capped)
         return capped
     log.warning(
-        "/dev/shm is only %s (need ~%.0f MB per batch): worker processes disabled, falling back to a thread pool. "
-        "Start the container with `--shm-size=8g` for maximum speed, or set MMS_NUM_WORKERS to override.",
+        "/dev/shm is only %s but one batch needs ~%.0f MB: worker processes disabled, prefetch falls back to threads "
+        "(correct, slightly slower). Permanent fix: start the container with `--shm-size=8g`, or as root try "
+        "`mount -o remount,size=8G /dev/shm`. Override the thread count with MMS_NUM_WORKERS.",
         describe_shm(),
         batch_bytes / 2**20,
     )
@@ -162,18 +163,24 @@ def make_loader(
     prefetch_factor: int = 2,
     seed: int = 0,
     threaded_below_workers: int | None = None,
+    batch_bytes: int | None = None,
 ) -> Any:
     """DataLoader / ThreadedBatcher factory for the training scripts.
 
+    `batch_bytes` is the estimated size of one collated batch (defaults to `batch_size` 224² float32 images);
+    it only feeds the /dev/shm budget check, so pass a realistic value for big pages.
     A `sampler` (DDP sharding) forces a real DataLoader — sharding cannot be emulated with threads.
     """
-    workers = tune_workers(num_workers)
+    if batch_bytes is None:
+        batch_bytes = max(1, batch_size) * _DEFAULT_BATCH
+    workers = tune_workers(num_workers, batch_bytes)
     if threaded_below_workers is None:
         switch = workers == 0 and num_workers > 0 and sampler is None
     else:
         switch = workers <= threaded_below_workers and sampler is None
     if switch:
-        threads = max(1, min(num_workers, os.cpu_count() or 1))
+        threads = max(1, min(num_workers or 8, os.cpu_count() or 1))
+        log.info("data pipeline: %d decode threads, lookahead 2 batches (no worker processes, so no /dev/shm use)", threads)
         return ThreadedBatcher(dataset, batch_size, collate_fn, workers=threads, shuffle=shuffle,
                                drop_last=drop_last, seed=seed)
     return DataLoader(

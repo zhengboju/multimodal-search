@@ -66,11 +66,16 @@ def test_make_loader_respects_budget(monkeypatch):
     monkeypatch.setattr(dl, "shm_available_bytes", lambda: 64 << 20)
     it = dl.make_loader(IdxDataset(10), 4, num_workers=8, shuffle=False)
     assert isinstance(it, dl.ThreadedBatcher)
+    assert it.workers == min(8, dl.os.cpu_count() or 1)  # decode threads replace worker processes
+    seen = {}
+    monkeypatch.setattr(dl, "tune_workers", lambda n, b=0: (seen.setdefault("bytes", b), 0)[1])  # record, then 0 workers
+    dl.make_loader(IdxDataset(10), 4, num_workers=8, shuffle=False, batch_bytes=300 << 20)
+    assert seen["bytes"] == 300 << 20  # the shm budget check gets the caller's realistic estimate
     assert len(list(it)) == 3
     monkeypatch.setattr(dl, "shm_available_bytes", lambda: 8 << 30)
-    it2 = dl.make_loader(IdxDataset(10), 4, num_workers=2, shuffle=False)
-    assert type(it2).__name__ == "DataLoader"
-    assert torch.equal(torch.cat([b for b in it2]), torch.cat([torch.tensor([[i, i * 2]]) for i in range(10)]))
+    it2 = dl.make_loader(IdxDataset(10), 4, num_workers=0, shuffle=False)
+    assert type(it2).__name__ == "DataLoader" and len(it2) == 3  # no worker spawn: correctness is covered above
+    assert torch.equal(torch.cat(list(it2)), torch.cat([torch.tensor([[i, i * 2]]) for i in range(10)]))
 
 
 def test_threaded_shuffle_covers_every_item_per_epoch():
