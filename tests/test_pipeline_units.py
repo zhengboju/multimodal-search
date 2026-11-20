@@ -112,3 +112,23 @@ def test_config_overrides(tmp_path):
     child.write_text("_base_: base.yaml\nb: {c: 5}\n")
     cfg = load_config(child, ["b.d=7", "e=[1, 2]"])
     assert cfg.a == 1 and cfg.b.c == 5 and cfg.b.d == 7 and cfg.e == [1, 2]
+
+def test_leak_check_detects_shared_and_clean_splits(tmp_path):
+    from mmsearch.data.check_leak import compare
+
+    ds = tiny_dataset(tmp_path)                      # 3 docs, 3 queries, one image
+    same = compare(ds, ds)
+    assert same["doc_overlap"] == 3 and same["query_overlap"] == 3
+
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other_img = other_dir / "x.png"
+    Image.new("RGB", (20, 20), "black").save(other_img)
+    clean = RetrievalDataset(
+        "other",
+        {"z": Doc("z", text="completely different page about zoology", image=str(other_img))},
+        {"qz": Query("qz", "unrelated question about animals")},
+        {"qz": {"z": 1}},
+    )
+    res = compare(ds, clean)
+    assert res["doc_overlap"] == 0 and res["query_overlap"] == 0
