@@ -124,4 +124,7 @@ class CLIPWrapper(nn.Module):
         out_dir = Path(out_dir)
         self.model.save_pretrained(out_dir)
         self.tokenizer.save_pretrained(out_dir)
-        (out_dir / "preprocessor_config.json").write_text(json.dumps({"image_mean": list(self.mean), "image_std": list(self.std)}))
+        pp = out_dir / "preprocessor_config.json"  # merge, so the dir can also be loaded by AutoProcessor
+        cfg = json.loads(pp.read_text()) if pp.exists() else {"image_size": self.image_size, "crop_size": self.image_size}
+        cfg.update({"image_mean": list(self.mean), "image_std": list(self.std)})
+        pp.write_text(json.dumps(cfg, indent=2))

@@ -5,6 +5,7 @@ query 理解 → 多路召回（BM25 / CLIP 双塔 / 多向量 late interaction�
 并配套可量化的评估体系（Recall/nDCG/MRR + 延迟/体积/QPS + badcase 归因 + LLM-as-judge 一致性）。
 
 对应执行计划：[多模态检索项目执行计划.md](多模态检索项目执行计划.md)。实验报告模板：[docs/REPORT.md](docs/REPORT.md)。
+**GPU 机器上怎么跑、每个阶段学什么：[docs/RUNBOOK.md](docs/RUNBOOK.md)（执行与学习手册）**。
 
 ## 1. 架构
 
